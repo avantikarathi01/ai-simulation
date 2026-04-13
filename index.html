@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>✦ Particle Gestures</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Playfair+Display:ital,wght@1,400&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#020408; overflow:hidden; font-family:'Space Mono',monospace; color:#fff; cursor:none; }
+  #threeCanvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+
+  #videoFeed {
+    position:fixed; bottom:20px; right:20px;
+    width:200px; height:150px;
+    border:1.5px solid #00ffea; border-radius:6px;
+    object-fit:cover; opacity:0.7;
+    transform:scaleX(-1); z-index:10;
+  }
+  #handCanvas {
+    position:fixed; bottom:20px; right:20px;
+    width:200px; height:150px;
+    z-index:11; pointer-events:none;
+  }
+
+  #ui { position:fixed; top:20px; left:20px; z-index:20; display:flex; flex-direction:column; gap:10px; }
+  #title { font-family:'Playfair Display',serif; font-style:italic; font-size:1.5rem; color:#00ffea; text-shadow:0 0 24px #00ffea88; }
+  #status { font-size:0.6rem; letter-spacing:0.15em; text-transform:uppercase; color:#ffffff66; }
+  #status span { color:#00ffea; }
+  #gesture-display { font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:#ff00c8; text-shadow:0 0 12px #ff00c855; min-height:1.2em; }
+
+  #templates { display:flex; gap:6px; flex-wrap:wrap; max-width:340px; }
+  .tmpl-btn {
+    background:rgba(0,10,20,0.8); border:1px solid rgba(0,255,234,0.2);
+    color:rgba(255,255,255,0.5); font-family:'Space Mono',monospace;
+    font-size:0.58rem; letter-spacing:0.1em; text-transform:uppercase;
+    padding:5px 11px; cursor:pointer; border-radius:2px; transition:all 0.2s;
+  }
+  .tmpl-btn:hover, .tmpl-btn.active {
+    border-color:#00ffea; color:#00ffea;
+    background:rgba(0,255,234,0.1); box-shadow:0 0 10px rgba(0,255,234,0.2);
+  }
+
+  #hints {
+    position:fixed; bottom:22px; left:22px; z-index:20;
+    font-size:0.56rem; color:rgba(255,255,255,0.3);
+    letter-spacing:0.08em; line-height:2; text-transform:uppercase;
+  }
+  #hints b { color:#ff00c8; font-weight:400; }
+
+  #tmpl-label {
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-family:'Playfair Display',serif; font-style:italic;
+    font-size:3.5rem; color:#fff; opacity:0; pointer-events:none;
+    text-shadow:0 0 60px rgba(255,255,255,0.4); z-index:30; transition:opacity 0.4s;
+  }
+
+  #meter {
+    position:fixed; top:50%; right:22px; transform:translateY(-50%);
+    width:3px; height:120px; background:rgba(255,255,255,0.08); border-radius:2px; z-index:20;
+  }
+  #meter-fill {
+    position:absolute; bottom:0; left:0; right:0;
+    background:linear-gradient(to top,#ff00c8,#00ffea);
+    border-radius:2px; transition:height 0.1s;
+  }
+
+  #cursor {
+    position:fixed; width:6px; height:6px; background:#00ffea; border-radius:50%;
+    pointer-events:none; z-index:9999; transform:translate(-50%,-50%); box-shadow:0 0 12px #00ffea;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="threeCanvas"></canvas>
+<video id="videoFeed" autoplay playsinline muted></video>
+<canvas id="handCanvas" width="200" height="150"></canvas>
+
+<div id="ui">
+  <div id="title">✦ Particle Gestures</div>
+  <div id="status">Camera: <span id="camStatus">starting…</span></div>
+  <div id="gesture-display">— awaiting hand</div>
+  <div id="templates">
+    <button class="tmpl-btn active" data-t="sphere">Sphere</button>
+    <button class="tmpl-btn" data-t="heart">Heart</button>
+    <button class="tmpl-btn" data-t="flower">Flower</button>
+    <button class="tmpl-btn" data-t="saturn">Saturn</button>
+    <button class="tmpl-btn" data-t="fireworks">Fireworks</button>
+    <button class="tmpl-btn" data-t="dna">DNA</button>
+    <button class="tmpl-btn" data-t="galaxy">Galaxy</button>
+    <button class="tmpl-btn" data-t="wave">Wave</button>
+  </div>
+</div>
+
+<div id="hints">
+  <b>✋ Open hand</b> → expand<br>
+  <b>✊ Fist</b> → collapse<br>
+  <b>🤏 Pinch</b> → color shift<br>
+  <b>☝ Point up</b> → next shape<br>
+  <b>↔ Move hand</b> → rotate<br>
+  <b>Mouse drag</b> → orbit
+</div>
+
+<div id="tmpl-label"></div>
+<div id="meter"><div id="meter-fill" style="height:50%"></div></div>
+<div id="cursor"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+'use strict';
+
+// Cursor
+const cursorEl = document.getElementById('cursor');
+document.addEventListener('mousemove', e => {
+  cursorEl.style.left = e.clientX+'px';
+  cursorEl.style.top  = e.clientY+'px';
+});
+
+// ─── THREE SETUP ───────────────────────────────────────────
+const canvas   = document.getElementById('threeCanvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x020408);
+
+const scene = new THREE.Scene();
+const cam3d = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 2000);
+cam3d.position.z = 90;
+
+window.addEventListener('resize', () => {
+  cam3d.aspect = innerWidth/innerHeight;
+  cam3d.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ─── PARTICLE BUFFERS ──────────────────────────────────────
+const N   = 5000;
+const pos = new Float32Array(N*3);
+const tgt = new Float32Array(N*3);
+const col = new Float32Array(N*3);
+
+// Scatter particles randomly at start
+for (let i=0;i<N;i++){
+  pos[i*3]   = (Math.random()-.5)*100;
+  pos[i*3+1] = (Math.random()-.5)*100;
+  pos[i*3+2] = (Math.random()-.5)*100;
+  col[i*3]=1; col[i*3+1]=1; col[i*3+2]=1;
+}
+
+const geom = new THREE.BufferGeometry();
+geom.setAttribute('position', new THREE.BufferAttribute(pos,3));
+geom.setAttribute('color',    new THREE.BufferAttribute(col,3));
+
+const pMat = new THREE.PointsMaterial({
+  size: 0.55,
+  vertexColors: true,
+  transparent: true,
+  opacity: 0.95,
+  sizeAttenuation: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+});
+
+const mesh = new THREE.Points(geom, pMat);
+scene.add(mesh);
+
+// ─── SHAPE TEMPLATES ───────────────────────────────────────
+const SHAPES = {
+  sphere(i) {
+    const phi   = Math.acos(2*Math.random()-1);
+    const theta = Math.random()*Math.PI*2;
+    const r = 26+(Math.random()-.5)*5;
+    return [r*Math.sin(phi)*Math.cos(theta), r*Math.sin(phi)*Math.sin(theta), r*Math.cos(phi)];
+  },
+  heart(i) {
+    const t = (i/N)*Math.PI*2;
+    const z = (i/N)*18-9;
+    const s = 11*(1-Math.abs(z)/11);
+    const x = s*16*Math.pow(Math.sin(t),3)*0.1;
+    const y = s*(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t))*0.1;
+    return [x+(Math.random()-.5)*1.2, y+(Math.random()-.5)*1.2, z+(Math.random()-.5)*1.2];
+  },
+  flower(i) {
+    const petals=7;
+    const u=(i/N)*Math.PI*2*petals;
+    const r=22*Math.abs(Math.sin(u/2))+Math.random()*3;
+    const a=u/petals;
+    return [r*Math.cos(a), r*Math.sin(a), (Math.random()-.5)*8];
+  },
+  saturn(i) {
+    if (i<N*0.55) {
+      const phi=Math.acos(2*Math.random()-1), theta=Math.random()*Math.PI*2;
+      const r=16+(Math.random()-.5)*4;
+      return [r*Math.sin(phi)*Math.cos(theta), r*Math.sin(phi)*Math.sin(theta)*0.6, r*Math.cos(phi)*0.6];
+    }
+    const theta=Math.random()*Math.PI*2, r=28+Math.random()*14;
+    return [r*Math.cos(theta), (Math.random()-.5)*2, r*Math.sin(theta)];
+  },
+  fireworks(i) {
+    const bx=[-20,20,-10,10,0,-18,18][i%7];
+    const by=[10,-5,20,-15,25,0,-10][i%7];
+    const r=Math.random()*20;
+    const phi=Math.acos(2*Math.random()-1), theta=Math.random()*Math.PI*2;
+    return [bx+r*Math.sin(phi)*Math.cos(theta), by+r*Math.sin(phi)*Math.sin(theta), r*Math.cos(phi)];
+  },
+  dna(i) {
+    const h=(i/N)*64-32, a=h*0.28+(i%2)*Math.PI;
+    const r=11+(Math.random()-.5)*1.5;
+    return [r*Math.cos(a), h, r*Math.sin(a)];
+  },
+  galaxy(i) {
+    const arms=3, arm=i%arms;
+    const d=Math.pow(Math.random(),0.5)*36;
+    const a=(arm/arms)*Math.PI*2+d*0.13+(Math.random()-.5)*(0.5+d*0.02);
+    return [d*Math.cos(a), (Math.random()-.5)*4*(1-d/36), d*Math.sin(a)];
+  },
+  wave(i,t=0) {
+    const cols=80, c=i%cols, r=Math.floor(i/cols);
+    const x=(c/cols-.5)*72, z=(r/(N/80)-.5)*52;
+    return [x, 11*Math.sin(x*0.14+t*2)*Math.cos(z*0.14+t), z];
+  },
+};
+
+const PALETTES = {
+  sphere:    [[0,1,.92],[.5,.5,1],[1,0,.78],[0,.7,1]],
+  heart:     [[1,.15,.35],[1,.55,.65],[.9,0,.25],[1,.4,.5]],
+  flower:    [[1,.9,0],[.3,1,.3],[1,.5,0],[.8,1,.2]],
+  saturn:    [[1,.8,.4],[.85,.65,.3],[1,1,.7],[.9,.7,.2]],
+  fireworks: [[1,.3,0],[1,1,0],[0,1,.5],[1,0,1],[0,.7,1],[1,.6,0],[.4,0,1]],
+  dna:       [[0,1,1],[0,.5,1],[.5,0,1],[0,.8,.8]],
+  galaxy:    [[.2,.4,1],[.8,.5,1],[1,.85,.4],[.4,.2,.9]],
+  wave:      [[0,.9,1],[0,.5,.9],[.6,0,1],[0,1,.7]],
+};
+
+let curTmpl   = 'sphere';
+let expansion = 1.0;
+let hueAngle  = 0;
+let doHue     = false;
+let rotX=0, rotY=0;
+const TMPL_KEYS = Object.keys(SHAPES);
+let tmplIdx = 0;
+
+function buildTargets(name, t=0) {
+  const gen = SHAPES[name];
+  const pal = PALETTES[name];
+  for (let i=0;i<N;i++){
+    const p=gen(i,t);
+    tgt[i*3]=p[0]; tgt[i*3+1]=p[1]; tgt[i*3+2]=p[2];
+    const c=pal[i%pal.length];
+    col[i*3]=c[0]; col[i*3+1]=c[1]; col[i*3+2]=c[2];
+  }
+  geom.attributes.color.needsUpdate=true;
+}
+buildTargets(curTmpl);
+
+const tmplLabel   = document.getElementById('tmpl-label');
+const meterFill   = document.getElementById('meter-fill');
+const gestureDisp = document.getElementById('gesture-display');
+
+function switchTo(name) {
+  curTmpl=name; tmplIdx=TMPL_KEYS.indexOf(name);
+  buildTargets(name);
+  tmplLabel.textContent=name.toUpperCase();
+  tmplLabel.style.opacity='1';
+  setTimeout(()=>tmplLabel.style.opacity='0',1400);
+  document.querySelectorAll('.tmpl-btn').forEach(b=>
+    b.classList.toggle('active', b.dataset.t===name));
+}
+
+document.querySelectorAll('.tmpl-btn').forEach(b=>
+  b.addEventListener('click',()=>switchTo(b.dataset.t)));
+
+// ─── MOUSE ─────────────────────────────────────────────────
+let dragging=false, lmx=0, lmy=0;
+canvas.addEventListener('mousedown', e=>{dragging=true;lmx=e.clientX;lmy=e.clientY;});
+window.addEventListener('mouseup', ()=>dragging=false);
+window.addEventListener('mousemove', e=>{
+  if(!dragging)return;
+  rotY+=(e.clientX-lmx)*0.012; rotX+=(e.clientY-lmy)*0.012;
+  lmx=e.clientX; lmy=e.clientY;
+});
+canvas.addEventListener('wheel', e=>{
+  cam3d.position.z=Math.max(20,Math.min(220,cam3d.position.z+e.deltaY*0.1));
+},{passive:true});
+
+// ─── RENDER LOOP ───────────────────────────────────────────
+let handActive=false;
+const clock=new THREE.Clock();
+
+(function animate(){
+  requestAnimationFrame(animate);
+  const t=clock.getElapsedTime();
+
+  if(curTmpl==='wave') buildTargets('wave',t);
+
+  // Lerp to targets
+  for(let i=0;i<N;i++){
+    const ef=expansion;
+    pos[i*3]  +=(tgt[i*3]  *ef-pos[i*3])  *0.055;
+    pos[i*3+1]+=(tgt[i*3+1]*ef-pos[i*3+1])*0.055;
+    pos[i*3+2]+=(tgt[i*3+2]*ef-pos[i*3+2])*0.055;
+  }
+  geom.attributes.position.needsUpdate=true;
+
+  // Color hue cycling
+  if(doHue){
+    hueAngle+=0.015;
+    const pal=PALETTES[curTmpl];
+    for(let i=0;i<N;i++){
+      const c=pal[i%pal.length];
+      col[i*3]  =Math.abs(Math.sin(c[0]*Math.PI+hueAngle));
+      col[i*3+1]=Math.abs(Math.sin(c[1]*Math.PI+hueAngle+2.09));
+      col[i*3+2]=Math.abs(Math.sin(c[2]*Math.PI+hueAngle+4.19));
+    }
+    geom.attributes.color.needsUpdate=true;
+  }
+
+  mesh.rotation.y+=(handActive?0:0.0018)+rotY*0.06;
+  mesh.rotation.x+=rotX*0.06;
+  rotX*=0.88; rotY*=0.88;
+
+  const pct=((expansion-0.15)/(2.2-0.15))*100;
+  meterFill.style.height=Math.max(2,Math.min(100,pct))+'%';
+
+  renderer.render(scene,cam3d);
+})();
+
+// ─── MEDIAPIPE ─────────────────────────────────────────────
+const videoEl  =document.getElementById('videoFeed');
+const handCv   =document.getElementById('handCanvas');
+const handCtx  =handCv.getContext('2d');
+const camStatus=document.getElementById('camStatus');
+
+let pinchCD=0, pointCD=0, lastHX=0.5, lastHY=0.5;
+
+const BONES=[
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],[0,17]
+];
+
+function drawHand(lm){
+  const W=200,H=150;
+  handCtx.clearRect(0,0,W,H);
+  // Mirror X (video is CSS-mirrored, so we mirror coords to match)
+  const mx=p=>(1-p.x)*W, my=p=>p.y*H;
+  handCtx.strokeStyle='rgba(0,255,234,0.85)';
+  handCtx.lineWidth=1.5;
+  for(const[a,b] of BONES){
+    handCtx.beginPath();
+    handCtx.moveTo(mx(lm[a]),my(lm[a]));
+    handCtx.lineTo(mx(lm[b]),my(lm[b]));
+    handCtx.stroke();
+  }
+  handCtx.fillStyle='#00ffea';
+  for(const p of lm){
+    handCtx.beginPath();
+    handCtx.arc(mx(p),my(p),2.5,0,Math.PI*2);
+    handCtx.fill();
+  }
+}
+
+function getGesture(lm){
+  const iE=lm[8].y <lm[6].y;
+  const mE=lm[12].y<lm[10].y;
+  const rE=lm[16].y<lm[14].y;
+  const pE=lm[20].y<lm[18].y;
+  const pinch=Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y) < 0.08;
+  return {
+    openHand: iE&&mE&&rE&&pE,
+    fist:    !iE&&!mE&&!rE&&!pE,
+    pinch,
+    pointUp:  iE&&!mE&&!rE&&!pE&&!pinch,
+    hx: 1-lm[9].x,
+    hy: lm[9].y,
+  };
+}
+
+function onResults(results){
+  if(results.multiHandLandmarks&&results.multiHandLandmarks.length>0){
+    handActive=true;
+    const lm=results.multiHandLandmarks[0];
+    drawHand(lm);
+    const g=getGesture(lm);
+
+    if(g.openHand){
+      expansion=Math.min(expansion+0.09,2.2);
+      gestureDisp.textContent='✋ OPEN HAND — expanding';
+      doHue=false;
+    } else if(g.fist){
+      expansion=Math.max(expansion-0.09,0.15);
+      gestureDisp.textContent='✊ FIST — collapsing';
+      doHue=false;
+    } else if(g.pinch){
+      doHue=true;
+      gestureDisp.textContent='🤏 PINCH — cycling colors';
+      if(pinchCD<=0){ pinchCD=20; }
+    } else if(g.pointUp){
+      doHue=false;
+      gestureDisp.textContent='☝ POINTING — next shape';
+      if(pointCD<=0){
+        tmplIdx=(tmplIdx+1)%TMPL_KEYS.length;
+        switchTo(TMPL_KEYS[tmplIdx]);
+        pointCD=50;
+      }
+    } else {
+      doHue=false;
+      gestureDisp.textContent='👋 hand detected';
+    }
+
+    if(pinchCD>0) pinchCD--;
+    if(pointCD>0) pointCD--;
+
+    // Rotation from hand movement
+    const dx=g.hx-lastHX, dy=g.hy-lastHY;
+    if(Math.abs(dx)>0.004||Math.abs(dy)>0.004){
+      rotY+=dx*5; rotX+=dy*5;
+    }
+    lastHX=g.hx; lastHY=g.hy;
+
+  } else {
+    if(handActive) gestureDisp.textContent='— no hand detected';
+    handActive=false; doHue=false;
+    handCtx.clearRect(0,0,200,150);
+    expansion+=(1.0-expansion)*0.02;
+  }
+}
+
+async function initCam(){
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:640,height:480,facingMode:'user'}
+    });
+    videoEl.srcObject=stream;
+    camStatus.textContent='active ✦';
+    camStatus.style.color='#00ffea';
+
+    const hands=new Hands({
+      locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}`
+    });
+    hands.setOptions({
+      maxNumHands:1, modelComplexity:1,
+      minDetectionConfidence:0.65, minTrackingConfidence:0.55,
+    });
+    hands.onResults(onResults);
+
+    const mpCam=new Camera(videoEl,{
+      onFrame:async()=>{await hands.send({image:videoEl});},
+      width:640,height:480
+    });
+    mpCam.start();
+
+  }catch(err){
+    camStatus.textContent='unavailable';
+    videoEl.style.display='none';
+    handCv.style.display='none';
+    gestureDisp.textContent='use mouse to interact';
+    console.warn('Camera:',err);
+  }
+}
+
+initCam();
+</script>
+</body>
+</html>
